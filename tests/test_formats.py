@@ -318,6 +318,62 @@ class ElfWriterTests(unittest.TestCase):
             dict(name="wide_little_entry", value=0x1200002004, size=4, binding=1, kind=2, section=1),
             dict(name="wide_little_object", value=0x3400005000, size=4, binding=1, kind=1, section=2)])
 
+    def test_elf64_little_endian_declared_sizes_above_32_bits(self):
+        # Huge *declared* memory and symbol spans; only three invented bytes
+        # are initialized. Never call Program.read on the mapped span.
+        base = 0x4200002000
+        memsz = 0x100001200
+        symbol_size = 0x100000080
+        program = Program("synthetic", "unknown", "x86-64", entry=base,
+                          segments=[Segment("sparse", base, b"\xA1\xBC\xCD",
+                                            memsz, writable=True)])
+        program.add_symbol(Symbol(base + 1, "wide_declared_object", kind="object",
+                                  size=symbol_size))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sparse-le.elf"
+            write_elf(program, path)
+            raw = path.read_bytes()
+        self.assertLess(len(raw), 1024)  # no 4-GiB allocation or materialization
+        self.assertEqual(raw[:7], b"\x7fELF\x02\x01\x01")
+        header, segments, sections, symbols = parse_elf(self, raw)
+        self.assertEqual((header["machine"], header["phnum"], header["shnum"]), (62, 1, 5))
+        self.assertEqual(struct.unpack_from("<IIQQQQQQ", raw, 64),
+                         (1, 6, segments[0]["offset"], 0x4200002000, 0x4200002000,
+                          3, 0x100001200, 16))
+        self.assertEqual(segments[0]["data"], b"\xA1\xBC\xCD")
+        self.assertEqual(segments[0]["filesz"], 3)
+        self.assertEqual(segments[0]["memsz"], 0x100001200)
+        self.assertEqual((sections[".data0"]["size"], sections[".data0"]["addr"]),
+                         (3, 0x4200002000))
+        self.assertEqual(symbols[1],
+                         dict(name="wide_declared_object", value=0x4200002001,
+                              size=0x100000080, binding=1, kind=1, section=1))
+
+    def test_elf64_big_endian_declared_sizes_above_32_bits(self):
+        base = 0x6200004000
+        program = Program("synthetic", "unknown", "ppc64", big_endian=True,
+                          entry=base,
+                          segments=[Segment("sparse_code", base, b"\x99\x88",
+                                            0x200000001, executable=True)])
+        program.add_symbol(Symbol(base, "wide_be_function", size=0x100000ABC))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sparse-be.elf"
+            write_elf(program, path)
+            raw = path.read_bytes()
+        self.assertLess(len(raw), 1024)
+        self.assertEqual(raw[:7], b"\x7fELF\x02\x02\x01")
+        header, segments, sections, symbols = parse_elf(self, raw)
+        self.assertEqual((header["machine"], header["entry"], header["phnum"]),
+                         (21, 0x6200004000, 1))
+        self.assertEqual(struct.unpack_from(">IIQQQQQQ", raw, 64),
+                         (1, 5, segments[0]["offset"], 0x6200004000, 0x6200004000,
+                          2, 0x200000001, 16))
+        self.assertEqual(segments[0]["data"], b"\x99\x88")
+        self.assertEqual(sections[".text0"]["size"], 2)
+        self.assertEqual(symbols[1],
+                         dict(name="wide_be_function", value=0x6200004000,
+                              size=0x100000ABC, binding=1, kind=2, section=1))
+
     def test_arm_thumb_symbols_override_program_names(self):
         program = Program("synthetic", "unknown", "arm", entry=0x1000,
                           segments=[Segment("code", 0x1000, bytes(32), 32, executable=True)])
