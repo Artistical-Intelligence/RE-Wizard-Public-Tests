@@ -219,6 +219,105 @@ class ElfWriterTests(unittest.TestCase):
         self.assertEqual(symbols[1]["value"], address)
         self.assertEqual(symbols[1]["binding"], 1)
 
+    def test_elf32_big_endian_layout_symbols_and_unbacked_memory(self):
+        program = Program("synthetic", "unknown", "ppc", big_endian=True, entry=0x10203044,
+                          segments=[Segment("code", 0x10203040, b"\x12\x34\x56\x78ABC", 32,
+                                            executable=True),
+                                    Segment("zero_area", 0x40506070, b"", 48, writable=True)])
+        program.add_symbol(Symbol(0x10203044, "big_entry", size=3))
+        program.add_symbol(Symbol(0x40506078, "big_zero", kind="object", size=8))
+        program.add_symbol(Symbol(0x708090A0, "big_absolute", kind="object", size=2))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.elf"
+            write_elf(program, path)
+            raw = path.read_bytes()
+        self.assertEqual(raw[:16], b"\x7fELF\x01\x02\x01" + bytes(9))
+        header, segments, sections, symbols = parse_elf(self, raw)
+        self.assertEqual(header, dict(type=2, machine=20, version=1, entry=0x10203044,
+                                      phoff=52, shoff=header["shoff"], flags=0, ehsize=52,
+                                      phentsize=32, phnum=2, shentsize=40, shnum=6, shstrndx=5))
+        self.assertEqual(header["shoff"] % 8, 0)
+        self.assertGreaterEqual(segments[0]["offset"], 52 + 2 * 32)
+        self.assertLessEqual(segments[0]["offset"] + 7, segments[1]["offset"])
+        self.assertLessEqual(segments[1]["offset"], sections[".symtab"]["offset"])
+        self.assertEqual(struct.unpack_from(">IIIIIIII", raw, 52),
+                         (1, segments[0]["offset"], 0x10203040, 0x10203040, 7, 32, 5, 16))
+        self.assertEqual(struct.unpack_from(">IIIIIIII", raw, 84),
+                         (1, segments[1]["offset"], 0x40506070, 0x40506070, 0, 48, 6, 16))
+        self.assertEqual([segment["data"] for segment in segments], [b"\x12\x34\x56\x78ABC", b""])
+        self.assertEqual(program.read(0x40506070, 48), bytes(48))
+        self.assertEqual(set(sections), {"", ".text0", ".data1", ".symtab", ".strtab", ".shstrtab"})
+        for name, address, size, flags, segment in (
+                (".text0", 0x10203040, 7, 6, segments[0]),
+                (".data1", 0x40506070, 0, 3, segments[1])):
+            section = sections[name]
+            self.assertEqual((section["type"], section["flags"], section["addr"], section["offset"],
+                              section["size"], section["link"], section["info"], section["align"],
+                              section["entsize"]),
+                             (1, flags, address, segment["offset"], size, 0, 0, 16, 0))
+        symtab, strtab, shstrtab = (sections[name] for name in (".symtab", ".strtab", ".shstrtab"))
+        self.assertEqual((symtab["type"], symtab["size"], symtab["link"], symtab["info"],
+                          symtab["align"], symtab["entsize"]), (2, 64, 4, 1, 8, 16))
+        self.assertEqual(strtab["offset"], symtab["offset"] + 64)
+        self.assertEqual(shstrtab["offset"], strtab["offset"] + strtab["size"])
+        self.assertLessEqual(shstrtab["offset"] + shstrtab["size"], header["shoff"])
+        self.assertEqual((strtab["type"], strtab["align"], shstrtab["type"], shstrtab["align"]),
+                         (3, 1, 3, 1))
+        self.assertEqual(raw[strtab["offset"]:strtab["offset"] + strtab["size"]],
+                         b"\0big_entry\0big_zero\0big_absolute\0")
+        self.assertEqual(symbols[1:], [
+            dict(name="big_entry", value=0x10203044, size=3, binding=1, kind=2, section=1),
+            dict(name="big_zero", value=0x40506078, size=8, binding=1, kind=1, section=2),
+            dict(name="big_absolute", value=0x708090A0, size=2, binding=1, kind=1, section=0xFFF1)])
+
+    def test_elf64_little_endian_layout_wide_addresses_and_symbols(self):
+        program = Program("synthetic", "unknown", "x86-64", entry=0x1200002004,
+                          segments=[Segment("code", 0x1200002000, b"CODE1234", 32, executable=True),
+                                    Segment("data", 0x3400005000, b"\x89\xAB\xCD\xEF", 24, writable=True)])
+        program.add_symbol(Symbol(0x1200002004, "wide_little_entry", size=4))
+        program.add_symbol(Symbol(0x3400005000, "wide_little_object", kind="object", size=4))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "synthetic.elf"
+            write_elf(program, path)
+            raw = path.read_bytes()
+        self.assertEqual(raw[:16], b"\x7fELF\x02\x01\x01" + bytes(9))
+        header, segments, sections, symbols = parse_elf(self, raw)
+        self.assertEqual(header, dict(type=2, machine=62, version=1, entry=0x1200002004,
+                                      phoff=64, shoff=header["shoff"], flags=0, ehsize=64,
+                                      phentsize=56, phnum=2, shentsize=64, shnum=6, shstrndx=5))
+        self.assertEqual(header["shoff"] % 8, 0)
+        self.assertGreaterEqual(segments[0]["offset"], 64 + 2 * 56)
+        self.assertLessEqual(segments[0]["offset"] + 8, segments[1]["offset"])
+        self.assertLessEqual(segments[1]["offset"] + 4, sections[".symtab"]["offset"])
+        self.assertEqual(struct.unpack_from("<IIQQQQQQ", raw, 64),
+                         (1, 5, segments[0]["offset"], 0x1200002000, 0x1200002000, 8, 32, 16))
+        self.assertEqual(struct.unpack_from("<IIQQQQQQ", raw, 120),
+                         (1, 6, segments[1]["offset"], 0x3400005000, 0x3400005000, 4, 24, 16))
+        self.assertEqual([segment["data"] for segment in segments], [b"CODE1234", b"\x89\xAB\xCD\xEF"])
+        self.assertEqual(program.read(0x3400005000, 24), b"\x89\xAB\xCD\xEF" + bytes(20))
+        self.assertEqual(set(sections), {"", ".text0", ".data1", ".symtab", ".strtab", ".shstrtab"})
+        for name, address, size, flags, segment in (
+                (".text0", 0x1200002000, 8, 6, segments[0]),
+                (".data1", 0x3400005000, 4, 3, segments[1])):
+            section = sections[name]
+            self.assertEqual((section["type"], section["flags"], section["addr"], section["offset"],
+                              section["size"], section["link"], section["info"], section["align"],
+                              section["entsize"]),
+                             (1, flags, address, segment["offset"], size, 0, 0, 16, 0))
+        symtab, strtab, shstrtab = (sections[name] for name in (".symtab", ".strtab", ".shstrtab"))
+        self.assertEqual((symtab["type"], symtab["size"], symtab["link"], symtab["info"],
+                          symtab["align"], symtab["entsize"]), (2, 72, 4, 1, 8, 24))
+        self.assertEqual(strtab["offset"], symtab["offset"] + 72)
+        self.assertEqual(shstrtab["offset"], strtab["offset"] + strtab["size"])
+        self.assertLessEqual(shstrtab["offset"] + shstrtab["size"], header["shoff"])
+        self.assertEqual((strtab["type"], strtab["align"], shstrtab["type"], shstrtab["align"]),
+                         (3, 1, 3, 1))
+        self.assertEqual(raw[strtab["offset"]:strtab["offset"] + strtab["size"]],
+                         b"\0wide_little_entry\0wide_little_object\0")
+        self.assertEqual(symbols[1:], [
+            dict(name="wide_little_entry", value=0x1200002004, size=4, binding=1, kind=2, section=1),
+            dict(name="wide_little_object", value=0x3400005000, size=4, binding=1, kind=1, section=2)])
+
     def test_arm_thumb_symbols_override_program_names(self):
         program = Program("synthetic", "unknown", "arm", entry=0x1000,
                           segments=[Segment("code", 0x1000, bytes(32), 32, executable=True)])

@@ -24,15 +24,14 @@ python -B tools/check_public_tree.py
 python -B -m unittest discover -s tests -v
 ```
 
-The 13 original tests use invented byte strings, addresses, names and structural
+The synthetic tests use invented byte strings, addresses, names and structural
 objects. Generated ELF files live only in temporary directories, and are not
 executed. Tests independently inspect their headers, segment/section tables and
 symbols using Python's standard-library `struct` module.
 
 Covered cases include mapped bounds, unmapped/cross-segment reads, virtual
-zero-fill, byte order, strings, symbol selection, empty programs, ELF32 little
-endian, ELF64 big endian, ARM/Thumb symbol metadata and unsupported architecture
-rejection.
+zero-fill, byte order, strings, symbol selection, empty programs, ELF32 and ELF64 in both byte orders, ARM/Thumb symbol metadata and unsupported
+architecture rejection.
 
 ## Scope and limits
 
