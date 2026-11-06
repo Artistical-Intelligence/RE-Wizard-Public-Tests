@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "project": "RE-Wizard-Public-Tests",
+  "scope": "synthetic-format-components",
+  "files": [
+    {
+      "path": "rewizard/formats/model.py",
+      "sha256": "57fa83dc9175fba0f94b63f41c117653bd3bf6d9a144f5a756d6349523e072cc",
+      "bytes": 4224
+    },
+    {
+      "path": "rewizard/formats/elf_writer.py",
+      "sha256": "2fe0f46fe8078383c26f32f8e8b23faf09953d8d6d5d192a4c6c534fbdb54ca7",
+      "bytes": 5452
+    }
+  ]
+}
